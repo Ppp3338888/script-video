@@ -6,3 +6,4 @@ outputs/*.mp4
 outputs/*.png
 .DS_Store
 *.egg-info
+.env
