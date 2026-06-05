@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>VideoGen AI</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Segoe UI',system-ui,sans-serif;background:#0d1117;color:#e2e8f0;padding:20px}
+h1{color:#f8c94a;font-size:1.6rem;margin-bottom:4px}
+p.sub{color:#64748b;font-size:.85rem;margin-bottom:20px}
+.card{background:#161b27;border:1px solid #21293a;border-radius:10px;padding:20px;margin-bottom:16px}
+label{display:block;color:#64748b;font-size:.8rem;margin-bottom:5px}
+input,textarea{width:100%;background:#0d1117;border:1px solid #21293a;border-radius:6px;
+  color:#e2e8f0;padding:8px 12px;font-size:.95rem;margin-bottom:12px}
+textarea{height:120px;resize:vertical}
+.row{display:flex;gap:10px}
+.row input{flex:1;margin-bottom:0}
+button{background:#f8c94a;color:#0d1117;border:none;border-radius:6px;
+  padding:9px 20px;font-size:.9rem;font-weight:700;cursor:pointer}
+button:disabled{opacity:.4;cursor:not-allowed}
+button.sec{background:#21293a;color:#e2e8f0;font-weight:500}
+#bar{display:none;padding:8px 14px;border-radius:6px;font-size:.85rem;margin-bottom:14px}
+.proc{background:#0f2340;color:#60a5fa;display:block!important}
+.done{background:#0f2a1a;color:#4ade80;display:block!important}
+.err{background:#2a0f0f;color:#f87171;display:block!important}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px}
+.shot{background:#0d1117;border:1px solid #21293a;border-radius:8px;overflow:hidden}
+.shot img{width:100%;display:block;height:140px;object-fit:cover}
+.shot-body{padding:10px}
+.snum{font-size:.7rem;color:#f8c94a;font-weight:700;margin-bottom:3px}
+.sdesc{font-size:.78rem;color:#64748b;line-height:1.35}
+.tags{display:flex;gap:5px;margin-top:6px;flex-wrap:wrap}
+.tag{font-size:.65rem;padding:2px 7px;border-radius:10px;background:#21293a;color:#64748b}
+.ph{height:140px;background:#161b27;display:flex;align-items:center;
+    justify-content:center;color:#374151;font-size:.75rem}
+video{width:100%;border-radius:8px;margin-top:10px}
+</style>
+</head>
+<body>
+<h1>🎬 VideoGen AI</h1>
+<p class="sub">Script → video with real-time editing</p>
+
+<div class="card">
+  <label>Title</label>
+  <input id="title" value="My Short Film"/>
+  <label>Script</label>
+  <textarea id="script">INT. COFFEE SHOP - DAY
+Sarah, a tired programmer, stares at her laptop.
+
+JOHN enters and sits across from her.
+JOHN: You look terrible.
+SARAH: I've been debugging for 12 hours.
+
+EXT. STREET - NIGHT
+Sarah walks home alone under city lights.</textarea>
+  <button id="btn" onclick="generate()">Generate Video</button>
+</div>
+
+<div id="bar"></div>
+
+<div class="card" id="vsec" style="display:none">
+  <b style="font-size:.95rem">Generated Video</b>
+  <video id="vp" controls></video>
+</div>
+
+<div class="card" id="ssec" style="display:none">
+  <b style="font-size:.95rem">Shots</b>
+  <div class="grid" id="grid" style="margin-top:12px"></div>
+  <div class="row" style="margin-top:14px">
+    <input id="fb" placeholder="e.g. Make Sarah wear a red jacket…"/>
+    <button class="sec" onclick="applyFeedback()">Apply</button>
+  </div>
+</div>
+
+<script>
+let pid=null, poll=null;
+
+async function generate(){
+  const script=document.getElementById('script').value.trim();
+  if(!script){alert('Enter a script');return}
+  document.getElementById('btn').disabled=true;
+  bar('proc','⏳ Starting pipeline…');
+  const r=await fetch('/api/generate',{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({title:document.getElementById('title').value,script})});
+  const d=await r.json(); pid=d.project_id;
+  bar('proc',`⏳ Processing (${pid.slice(0,8)}…)`);
+  poll=setInterval(checkStatus,4000);
+}
+
+async function checkStatus(){
+  const d=await (await fetch(`/api/project/${pid}`)).json();
+  if(d.shots?.length) renderShots(d.shots);
+  if(d.status==='done'){
+    clearInterval(poll);
+    bar('done','✅ Done!');
+    if(d.video_url){
+      document.getElementById('vsec').style.display='block';
+      const v=document.getElementById('vp');
+      v.src=d.video_url+'?t='+Date.now(); v.load();
+    }
+    document.getElementById('btn').disabled=false;
+  } else if(d.status==='error'){
+    clearInterval(poll);
+    bar('err','❌ Error — check server logs');
+    document.getElementById('btn').disabled=false;
+  } else bar('proc',`⏳ ${d.status}… (${d.shots?.length||0} shots)`);
+}
+
+async function applyFeedback(){
+  const text=document.getElementById('fb').value.trim();
+  if(!text||!pid)return;
+  bar('proc',`⏳ Applying: "${text}"…`);
+  const d=await (await fetch(`/api/feedback/${pid}`,{method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({feedback:text})})).json();
+  if(d.status==='regenerated'){
+    bar('done',`✅ Regenerated shots: ${d.affected_shots.join(', ')}`);
+    const p=await (await fetch(`/api/project/${pid}`)).json();
+    renderShots(p.shots);
+    if(p.video_url){
+      document.getElementById('vsec').style.display='block';
+      const v=document.getElementById('vp');
+      v.src=p.video_url+'?t='+Date.now(); v.load();
+    }
+  } else bar('done', d.message||'No change needed');
+}
+
+function renderShots(shots){
+  document.getElementById('ssec').style.display='block';
+  document.getElementById('grid').innerHTML=shots.map(s=>`
+    <div class="shot">
+      ${s.image_url
+        ?`<img src="${s.image_url}?t=${Date.now()}" alt="shot ${s.num}"/>`
+        :`<div class="ph">Generating…</div>`}
+      <div class="shot-body">
+        <div class="snum">SHOT ${String(s.num).padStart(2,'0')} · v${s.version}</div>
+        <div class="sdesc">${s.description.slice(0,100)}…</div>
+        <div class="tags">
+          <span class="tag">${s.location}</span>
+          <span class="tag">${s.tod}</span>
+          <span class="tag">${s.mood}</span>
+        </div>
+      </div>
+    </div>`).join('');
+}
+
+function bar(type,msg){
+  const b=document.getElementById('bar');
+  b.className=type; b.textContent=msg;
+}
+</script>
+</body>
+</html>
